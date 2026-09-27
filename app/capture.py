@@ -1,17 +1,24 @@
 # -*- coding: utf-8 -*-
-"""找聊天窗口 + Windows Graphics Capture 盯着它 + 从帧里定位消息区。帧全程内存，绝不落盘。"""
+"""找聊天窗口 + Windows Graphics Capture 盯着它 + 从帧里定位消息区。帧全程内存，绝不落盘。
+认哪个聊天软件由 app/platforms.py 那张表决定（微信 / 企业微信…），这里不写死名字。"""
 import ctypes
 import os
 import time
 
 import numpy as np
 
+from app import platforms
+
 u32 = ctypes.windll.user32
 
 
-def find_wechat_hwnd():
-    """枚举可见顶层窗口，按进程名挑主窗口，没有就取第一个。
-    同进程还有工具窗和看图窗，面积可能更大，所以不能按面积挑。"""
+def find_chat_hwnd(preferred=None):
+    """枚举可见顶层窗口，按平台表挑，返回 (hwnd, platform)。
+    preferred 是设置里选的平台 key（platforms.AUTO / None = 自动，按 platforms.ORDER 顺序试）：
+    - 先要「进程名对得上 + 标题落在该平台的主窗口标题里」（标题带未读数也能命中）；
+    - 一个都没有就退一步取该进程第一个可见顶层窗口——同进程还有工具窗、看图窗，
+      面积可能比主窗口大，所以不能按面积挑。
+    指定了哪个平台就只看哪个。都没找到抛 RuntimeError。"""
     k32 = ctypes.windll.kernel32
     found = []
 
@@ -30,16 +37,26 @@ def find_wechat_hwnd():
             return True
         pid = ctypes.c_ulong()
         u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-        if exe_of(pid.value) in ("weixin.exe", "wechat.exe"):
+        exe = exe_of(pid.value)
+        if exe:
             title = ctypes.create_unicode_buffer(256)
             u32.GetWindowTextW(hwnd, title, 256)
-            found.append((hwnd, title.value))
+            found.append((hwnd, exe, title.value))
         return True
 
     u32.EnumWindows(cb, 0)
-    if not found:
-        raise RuntimeError("没找到聊天窗口，开着吗？")
-    return next((h for h, t in found if t == "微信"), found[0][0])
+    keys = (preferred,) if preferred in platforms.TABLE else platforms.ORDER
+    for key in keys:
+        pf = platforms.TABLE[key]
+        hits = [(h, t) for h, exe, t in found if exe in pf.exes]
+        if hits:
+            return next(((h, pf) for h, t in hits if any(w in t for w in pf.titles)), (hits[0][0], pf))
+    raise RuntimeError("没找到聊天窗口，开着吗？")
+
+
+def window_alive(hwnd):
+    """句柄还有效吗（窗口关了 / 换成了另一个软件的窗口都得重认）。"""
+    return bool(hwnd) and bool(u32.IsWindow(hwnd))
 
 
 def unminimize(hwnd):
@@ -52,26 +69,27 @@ def unminimize(hwnd):
     return True
 
 
-def chat_area(full, header_h=60):
+def chat_area(full, platform=platforms.DEFAULT):
     """消息列表区 (x0, y_top, x1, y_in, 面板底色, y_pane)，全靠像素锚点，不写死坐标，深浅主题通用：
     - 面板底色 = 右半边最常见的颜色（抽样算，全量 np.unique 在 2560 宽的图上要半秒）
-    - 面板左/右边界 = 第一/最后一根「底色占比 > 30%」的列（联系人列表是另一种底色，占比 0）
+    - 面板左/右边界 = 第一/最后一根「底色占比 > panel_col」的列（联系人列表是另一种底色，占比 0）
     - y_pane = 面板第一行；会话名就印在 y_pane~y_top 这条头部里（公告条也在里面）
     - 横向分隔线 = 整行单色且非底色；输入框顶 y_in = 面板 45% 高度以下第一根；
       公告条下面那根（有的话）= 消息区顶 y_top，没有就用 header_h
     认不出（窗口太小 / 拖到一半布局没铺好）返回 None。
-    ponytail: 输入框拉高超过面板一半会认错；header_h 按 100% DPI 给的，缩放了按比例调。"""
+    ponytail: 输入框拉高超过面板一半会认错；几个阈值都在 app/platforms.py 里，按聊天软件调。"""
     H, W = full.shape[:2]
     right = full[::8, W // 2::8].reshape(-1, 3)
     vals, cnt = np.unique(right, axis=0, return_counts=True)
     bg = vals[cnt.argmax()]
     isbg = np.abs(full.astype(int) - bg).sum(-1) <= 6
     col = isbg[H // 4: H * 3 // 4].mean(0)
-    x0 = int(np.argmax(col > 0.3))
-    x1 = W - int(np.argmax(col[::-1] > 0.3))
+    x0 = int(np.argmax(col > platform.panel_col))
+    x1 = W - int(np.argmax(col[::-1] > platform.panel_col))
     row = isbg[:, x0:x1].mean(1)
-    y0 = int(np.argmax(row > 0.9))
-    y1 = H - int(np.argmax(row[::-1] > 0.9))
+    y0 = int(np.argmax(row > platform.panel_row))
+    y1 = H - int(np.argmax(row[::-1] > platform.panel_row))
+    header_h = platform.header_h
     band = full[y0:y1, x0:x1].astype(int)
     seps = y0 + np.where((band.std(axis=(1, 2)) < 4) & (row[y0:y1] < 0.1))[0]
     seps = [int(s) for i, s in enumerate(seps) if i == 0 or s - seps[i - 1] > 3]
@@ -88,9 +106,10 @@ class Capture:
     """WGC 盯窗口。采集线程只做「跟上一帧比」；settled() 在画面停稳后交出整帧，中间帧（滚动动画、
     新消息滑入的半截气泡）全跳过。动图表情永远停不稳，所以最多等 max_wait 秒照样交。"""
 
-    def __init__(self, hwnd, settle=0.25, max_wait=1.0):
+    def __init__(self, hwnd, platform=platforms.DEFAULT, settle=0.25, max_wait=1.0):
         from windows_capture import WindowsCapture
 
+        self.platform = platform
         self.settle, self.max_wait = settle, max_wait
         self.shape = self.area = self.last = self.pending = None
         self.t = self.t0 = 0.0
@@ -107,7 +126,7 @@ class Capture:
         if full.max() == 0:
             return
         if self.area is None or full.shape != self.shape:
-            self.shape, self.area = full.shape, chat_area(full)
+            self.shape, self.area = full.shape, chat_area(full, self.platform)
         if self.area is None:
             return
         x0, y0, x1, y1 = self.area[:4]  # 拿上一次的消息区做 diff 就够了，光标闪烁在输入框里，不算变化

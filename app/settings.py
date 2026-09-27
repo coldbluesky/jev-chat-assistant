@@ -12,6 +12,7 @@ import json
 import os
 import sys  # 只为下面这一处：打包后 __file__ 指向临时解包目录，config.json 得放在 exe 旁边才存得住
 
+from app import platforms
 from core.providers import CUSTOM, DRAFT_PROVIDERS, JEV_ENV, JEV_PROVIDERS, LEGACY, LLM_ENV
 
 _ROOT = (os.path.dirname(sys.executable) if getattr(sys, "frozen", False)
@@ -46,6 +47,12 @@ def context() -> int:
 def style() -> str:
     """用户自己描述的说话风格（可选，自由文本），只喂给起草模型。默认空 = 只照着最近的消息模仿。"""
     return str(_read("style") or "")
+
+def chat_app() -> str:
+    """看哪个聊天软件：auto（默认，自动认）/ 平台表里的 key（wechat、wecom…）。
+    认不出的值一律退 auto，改完要重开一次采集才生效。"""
+    v = str(_read("chat_app") or platforms.AUTO)
+    return v if v == platforms.AUTO or v in platforms.TABLE else platforms.AUTO
 
 def jev_provider() -> str:
     """判断模型走哪家：openrouter（默认）或 typesafe 直连。"""
@@ -153,7 +160,8 @@ def save(relationship_text: str | None = None, context_n: int | None = None, *,
          llm_key_text: str | None = None, draft_model_text: str | None = None,
          draft_base_url_text: str | None = None, reply_target_on: bool | None = None,
          style_text: str | None = None, thinking_on: bool | None = None,
-         check_update_on: bool | None = None, debug_view_on: bool | None = None) -> None:
+         check_update_on: bool | None = None, debug_view_on: bool | None = None,
+         chat_app_text: str | None = None) -> None:
     """每个参数为空/None = 保留当前值。两把 key 写进程环境 + HKCU\\Environment，不写任何文件。"""
     jev = jev_provider_text if jev_provider_text in JEV_PROVIDERS else jev_provider()
     draft = draft_provider_text if draft_provider_text in DRAFT_PROVIDERS else draft_provider()
@@ -180,6 +188,9 @@ def save(relationship_text: str | None = None, context_n: int | None = None, *,
         "draft_provider": draft, "draft_model": keep(draft_model_text, "draft_model"),
         "draft_base_url": keep(draft_base_url_text, "draft_base_url"),
         "reply_target": flag(reply_target_on, reply_target),
+        # 认不出的值 = 保留原样，别把一个好配置写成 auto
+        "chat_app": (chat_app_text if chat_app_text == platforms.AUTO or chat_app_text in platforms.TABLE
+                     else chat_app()),
         "thinking": flag(thinking_on, thinking),
         "check_update": flag(check_update_on, check_update),
         "debug_view": flag(debug_view_on, debug_view),

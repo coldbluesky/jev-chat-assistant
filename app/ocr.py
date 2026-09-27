@@ -1,11 +1,14 @@
 # -*- coding: utf-8 -*-
-"""消息区截图 → 谁说了什么。RapidOCR 吃 numpy，不落盘。"""
+"""消息区截图 → 谁说了什么。RapidOCR 吃 numpy，不落盘。
+「谁」靠 app/platforms.py 里那个聊天软件的配置判：气泡什么颜色算我、要不要再要求靠右。"""
 import difflib
 import re
 import time
 
 import numpy as np
 from rapidocr_onnxruntime import RapidOCR
+
+from app import platforms
 
 
 _ENGINE = None
@@ -33,12 +36,14 @@ def read_title(header):
     return re.sub(r"\s*[（(]\d+[)）]\s*$", "", text.strip())
 
 
-def who_said(chat, box):
-    """按 OCR 框里的颜色分类，不看 x 坐标。返回 (谁, 底色, 墨高)：
+def who_said(chat, box, platform=platforms.DEFAULT):
+    """按 OCR 框里的颜色分类。返回 (谁, 底色, 墨高)：
     先看底色平不平：框里众数颜色占比 <45% 就是图片（头像/照片/表情包）里的字 → None 丢掉。
-    绿底 → me；非绿且文字对底色对比度 ≥150 → her；其余（引用块、群里的发言人名、时间戳、系统提示、
+    自己的气泡底色 → me（微信绿泡、企业微信彩色泡，见 platforms.is_me_bubble；
+    配置里要了 me_right 的话，气泡还得偏右，不然算对方——多防一层认错人）；
+    非 me 且文字对底色对比度 ≥150 → her；其余（引用块、群里的发言人名、时间戳、系统提示、
     链接卡片描述——都是灰字，对比度 80~95）→ "gray"。
-    实测：气泡正文对比度 178~208，me 绿泡 142~150，灰字 ≤ 93。深浅主题都靠这套。
+    实测（微信）：气泡正文对比度 178~208，me 绿泡 142~150，灰字 ≤ 93。深浅主题都靠这套。
     墨高 = 框里最长一段连续有字的行数（OCR 框对小字有固定 padding、还会蹭到上下行，不能拿框高比大小）。"""
     xs, ys = [p[0] for p in box], [p[1] for p in box]
     reg = chat[int(min(ys)):int(max(ys)), int(min(xs)):int(max(xs))].astype(int)
@@ -56,8 +61,10 @@ def who_said(chat, box):
     for r in (diff > 60).any(axis=1):
         best = best + 1 if r else 0
         ink_h = max(ink_h, best)
-    if bg[1] > bg[0] + 40 and bg[1] > bg[2] + 40:
-        return "me", bg, ink_h
+    if platforms.is_me_bubble(bg, platform):
+        if not platform.me_right or (min(xs) + max(xs)) / 2 > 0.5 * chat.shape[1]:
+            return "me", bg, ink_h
+        # 彩色气泡却落在面板左半边：那是对方那一侧，别认成自己发的
     return ("her" if diff.max() >= 150 else "gray"), bg, ink_h
 
 
@@ -78,7 +85,7 @@ class Reader:
         self.last_boxes = []  # 调试视图用：[(x0,y0,x1,y1,kind,text)]，消息区裁剪坐标
         self.last_ms = 0  # 上一帧 OCR 耗时
 
-    def read(self, chat, pane_bg):
+    def read(self, chat, pane_bg, platform=platforms.DEFAULT):
         """→ [(who, name, text, y)]，同一气泡的多行已合并。who ∈ me/her；name 群聊里是发言人，单聊 None。
         顺带把每个框的分类记进 self.last_boxes（调试视图画框用，几十个 tuple，不开也不亏）。"""
         t0 = time.perf_counter()
@@ -91,7 +98,7 @@ class Reader:
         # ponytail: 名字行被 OCR 漏掉时会挂到上一个人头上。
         name, raw = None, []
         for box, text, _ in sorted(res or [], key=lambda r: r[0][0][1]):
-            kind, bg, h = who_said(chat, box)
+            kind, bg, h = who_said(chat, box, platform)
             xs, ys = [p[0] for p in box], [p[1] for p in box]
             rect = (int(min(xs)), int(min(ys)), int(max(xs)), int(max(ys)))
             if kind == "gray":

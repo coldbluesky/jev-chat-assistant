@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""用合成数据预览 Qt 界面；不采集、不联网、不操作真实微信。
+"""用合成数据预览 Qt 界面；不采集、不联网、不操作真实聊天窗口。
 
     python tools/preview_ui.py --state ready
     python tools/preview_ui.py --state ready --screenshot docs/ui_home.png
@@ -18,7 +18,7 @@ from app import settings
 
 _STATES = ("ready", "waiting", "loading", "error", "setup", "settings", "paused", "debug")
 
-# 调试视图预览用的真微信截图（只读进内存，不改不存）；没有就退一张空画面
+# 调试视图预览用的真聊天截图（只读进内存，不改不存）；没有就退一张空画面
 _FRAME = Path("/private/tmp/claude-501/-Users-lpitiless-Documents-project-wechatjev"
               "/26954c2b-b4b9-432e-bad7-0d0b803e4309/images/9.png")
 _AREA = (433, 152, 1298, 767)  # 那张图里的消息区，头部从 y=40 起
@@ -60,7 +60,7 @@ def _debug_packet():
             "title": "白金搬砖小分队", "boxes": _BOXES, "lines": _LINES,
             "ocr_ms": 261, "ts": time.time()}
 
-_CHAT = "白金搬砖小分队"  # 演示里「微信当前开着的」会话：用群聊，回复对象那一行才看得见
+_CHAT = "白金搬砖小分队"  # 演示里「聊天窗口当前开着的」会话：用群聊，回复对象那一行才看得见
 # (会话, 谁, 内容, 群里的发言人, 时间)：两个会话，下拉框里都能看到
 _MESSAGES = (
     ("白金搬砖小分队", "her", "周末有人去爬山吗", "阿杰", "09:12"),
@@ -103,10 +103,10 @@ _RESULT = {
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="用合成聊天预览 Qt UI；绝不采集、联网或填入真实微信。"
+        description="用合成聊天预览 Qt UI；绝不采集、联网或填入真实聊天窗口。"
     )
     parser.add_argument("--state", choices=_STATES, default="ready", help="预览界面状态")
-    parser.add_argument("--screenshot", metavar="PATH", help="将演示界面保存为 PNG 后退出（合成数据，不含微信内容）")
+    parser.add_argument("--screenshot", metavar="PATH", help="将演示界面保存为 PNG 后退出（合成数据，不含真实聊天内容）")
     args = parser.parse_args()
     target = Path(args.screenshot).expanduser() if args.screenshot else None
 
@@ -181,7 +181,7 @@ def main() -> int:
         def simulate_fill(text):
             # 等 Overlay 自身的点击反馈结束后，再显示明确的演示提示。
             QTimer.singleShot(0, lambda: ov.set_status(
-                f"演示模式：已模拟填入「{text}」；未操作微信。", kind="success"
+                f"演示模式：已模拟填入「{text}」；未操作聊天窗口。", kind="success"
             ))
 
         # 只有当前会话有结果，切到另一个会话就是空态——跟真实情况一致
@@ -201,7 +201,7 @@ def main() -> int:
             ov.set_status("演示模式：请填写示例密钥，设置仅保存在本次预览内。", kind="warning")
             ov.open_settings()
         elif args.state == "waiting":
-            ov.set_status("演示模式：等待对方的新消息；当前未连接微信。")
+            ov.set_status("演示模式：等待对方的新消息；当前未连接聊天窗口。")
         else:
             for chat, who, text, name, timestamp in _MESSAGES:
                 ov.log_message(who, text, name, timestamp=timestamp, chat=chat)

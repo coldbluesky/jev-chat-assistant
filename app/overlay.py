@@ -20,7 +20,7 @@ from qfluentwidgets import (
     setCustomStyleSheet, setFont, setTheme, setThemeColor,
 )
 
-from app import settings
+from app import platforms, settings
 from app.version import VERSION
 from core import jev_client, llm, providers
 from core.questions import CHOICE_LABELS
@@ -32,6 +32,8 @@ _RELATIONSHIPS = [
     ("恋人", "romantic partners"), ("朋友", "friends"), ("同事", "colleagues"),
     ("家人", "family"), ("自定义", None),
 ]
+# 设置页「聊天软件」那一个下拉的取值顺序：自动 + 平台表里的每个
+_CHAT_APPS = (platforms.AUTO,) + platforms.ORDER
 
 
 def _choice(answers, name):
@@ -244,7 +246,7 @@ class Overlay:
         self.counts = {}  # {会话名: 消息条数}
         self.hers = {}  # {会话名: 对方最近一句}
         self.targets = {}  # {会话名: ([发言人], 当前回复对象)}
-        self._chat = ""  # 微信当前开着的会话
+        self._chat = ""  # 聊天窗口当前开着的会话
         self._shown = ""  # 界面上正在看的会话（浏览时和上面不一样）
         self.win = _MainWindow(self._relayout)
         self.win.setObjectName("assistantWindow")
@@ -487,12 +489,24 @@ class Overlay:
         heading.addWidget(_tool(FIF.RETURN, "返回回复建议", self._back_home))
         heading.addWidget(_label("设置", 23, "#24382d", True), 1)
         body.addLayout(heading)
-        body.addWidget(_label("调整关系背景，配置判断和起草用的两个模型。", 13, _MUTED))
+        body.addWidget(_label("选择聊天软件、调整关系背景，配置判断和起草用的两个模型。", 13, _MUTED))
         preference = _Surface()
         box = QVBoxLayout(preference)
         box.setContentsMargins(16, 16, 16, 18)
         box.setSpacing(12)
         box.addWidget(_label("回复偏好", 16, "#304c3c", True))
+        chat_app_label = _label("聊天软件", 13)
+        box.addWidget(chat_app_label)
+        self.chatAppBox = ComboBox()
+        self.chatAppBox.setMinimumWidth(0)
+        self.chatAppBox.addItems(["自动识别"] + [platforms.TABLE[k].name for k in platforms.ORDER])
+        self.chatAppBox.setAccessibleName("聊天软件")
+        chat_app_label.setBuddy(self.chatAppBox)
+        box.addWidget(self.chatAppBox)
+        box.addWidget(self._hint(
+            "自动：开着哪个就认哪个。两个都开着、或者认错了想指定，就在这里选，"
+            "改完把标题栏的采集开关拨一下重认窗口。"
+        ))
         relation_label = _label("你们的关系", 13)
         box.addWidget(relation_label)
         self.relationshipBox = ComboBox()
@@ -765,6 +779,7 @@ class Overlay:
         group.status.setText("")
 
     def _load_settings(self):
+        self.chatAppBox.setCurrentIndex(_CHAT_APPS.index(settings.chat_app()))
         relationship = settings.relationship()
         index = next((i for i, (_, value) in enumerate(_RELATIONSHIPS) if value == relationship),
                      len(_RELATIONSHIPS) - 1)
@@ -819,7 +834,8 @@ class Overlay:
                           reply_target_on=self.targetSwitch.isChecked(),
                           style_text=self.styleEdit.text().strip(),
                           thinking_on=self.thinkingSwitch.isChecked(),
-                          check_update_on=self.updateSwitch.isChecked())
+                          check_update_on=self.updateSwitch.isChecked(),
+                          chat_app_text=_CHAT_APPS[self.chatAppBox.currentIndex()])
         except Exception:
             self._settings_feedback("保存失败，请检查配置文件是否可写后重试。", error=True)
             return
@@ -1009,11 +1025,11 @@ class Overlay:
         self.context.show()
 
     def current_chat(self):
-        """界面上正在看的会话（不一定是微信当前开着的那个）。"""
+        """界面上正在看的会话（不一定是聊天窗口当前开着的那个）。"""
         return self._shown
 
     def set_chat(self, title):
-        """微信切到了哪个会话：登记进下拉框并自动跟过去，不触发用户选择的回调。"""
+        """聊天窗口切到了哪个会话：登记进下拉框并自动跟过去，不触发用户选择的回调。"""
         if not title:
             return
         browsing = self._shown != self._chat  # 正看着的就是它、但之前是「浏览中」：也得重画，把填入放开
@@ -1035,7 +1051,7 @@ class Overlay:
         self.chatBox.blockSignals(False)
 
     def _on_chat_selected(self, index):
-        """用户自己挑了一个会话：只换看的内容，微信那边不动。"""
+        """用户自己挑了一个会话：只换看的内容，聊天窗口那边不动。"""
         title = self.chatBox.itemText(index)
         if title and title != self._shown:
             self._switch_to(title)
@@ -1096,7 +1112,7 @@ class Overlay:
 
     def show_cached(self, result):
         """把某个会话上次的结果放回界面；没有就回到空态。浏览别的会话时只给看不给填——
-        微信当前开着的不是它，填进去就串会话了。"""
+        聊天窗口当前开着的不是它，填进去就串会话了。"""
         if result:
             self.show(result)
         else:

@@ -13,8 +13,8 @@ import threading
 import traceback
 from collections import deque
 
-from app import settings, update, worker
-from app.capture import find_wechat_hwnd
+from app import platforms, settings, update, worker
+from app.capture import find_chat_hwnd, window_alive
 from app.fill import fill
 from app.overlay import Overlay
 from app.version import VERSION
@@ -25,7 +25,7 @@ from core.engine import analyze
 # 只是缓冲区，实际喂模型几条由设置里的「参考上下文」决定
 # senders：这个群里发过言的人，去重、最近的排最前；target：用户挑的回复对象（None = 跟着最近那个走）
 chats = {}
-state = {"area": None, "busy": False, "rerun": None, "hwnd": None, "chat": ""}
+state = {"area": None, "busy": False, "rerun": None, "hwnd": None, "platform": None, "chat": ""}
 results = queue.Queue()
 update_result = queue.Queue()  # 独立小队列，别跟 results 的 (kind, r, title, revision) 形状搅在一起
 
@@ -51,14 +51,14 @@ def fill_reply(text):
     if settings.reply_target() and ov.at_prefix_enabled():
         target = target_of(ov.current_chat())  # 填进去的是界面上正看着的那个会话的对象
         if target:
-            text = f"@{target} " + text  # 纯文本，微信不认成真正的 @，只是让群里看得出在跟谁说
-    fill(state["hwnd"], state["area"], text)
+            text = f"@{target} " + text  # 纯文本，聊天软件不认成真正的 @，只是让群里看得出在跟谁说
+    fill(state["hwnd"], state["area"], text, platforms.get(state["platform"]))
 
 
 def spawn_worker():
     """开一个采集子进程，它跟着 capture_on 走：置位=采集，清掉=暂停。"""
     p = multiprocessing.Process(target=worker.run,
-                                args=(q, state["hwnd"], capture_on, debug_on), daemon=True)
+                                args=(q, state["hwnd"], state["platform"], capture_on, debug_on), daemon=True)
     p.start()
     return p
 
@@ -86,15 +86,29 @@ def on_debug_closed():
     settings.save(debug_view_on=False)
 
 
+def still_watching():
+    """子进程现在盯着的窗口还能用吗：窗口还在，且设置里指定的聊天软件跟它一致。
+    设置里选的是「自动」就不比平台——换软件了窗口句柄先失效，一样会重认。"""
+    if not window_alive(state["hwnd"]):
+        return False
+    want = settings.chat_app()
+    return want == platforms.AUTO or want == state["platform"]
+
+
 def on_toggle_capture(on):
-    """标题栏开关。启动时没找到微信就没有子进程，这会儿再找一次，找到了才真开得起来。"""
+    """标题栏开关。启动时没找到聊天窗口就没有子进程，这会儿再找一次，找到了才真开得起来；
+    窗口关了、或者设置里换过聊天软件，也在这里重认一遍。"""
     global child
     if not on:
         capture_on.clear()
         return
+    if child is not None and not still_watching():
+        child.terminate()
+        child.join()
+        child = None
     if child is None:
         try:
-            state["hwnd"] = find_wechat_hwnd()
+            state["hwnd"], state["platform"] = find_chat_hwnd(settings.chat_app())
         except RuntimeError:
             ov.set_capture(False, "未找到聊天窗口，打开后再开启采集")
             return
@@ -165,7 +179,7 @@ def drain():
         if kind == "area":  # 只是窗口挪了位置，坐标跟着更新，别的什么都不用动
             state["area"] = msg[1]
             continue
-        if kind == "chat":  # 微信切了会话，界面跟过去（用户正浏览别的会话时也跟，微信是准的）
+        if kind == "chat":  # 聊天窗口切了会话，界面跟过去（用户正浏览别的会话时也跟，窗口是准的）
             state["chat"] = msg[1]
             ov.set_chat(msg[1])
             continue
@@ -183,7 +197,7 @@ def drain():
         if kind == "resumed":  # 子进程重新开始采集
             ov.set_capture(True)
             continue
-        if kind == "dead":  # 采集彻底停了（微信关了之类），这才是真的要清状态
+        if kind == "dead":  # 采集彻底停了（聊天窗口关了之类），这才是真的要清状态
             state["area"] = None
             for c in chats.values():  # 在跑的分析作废，回来的结果不再往界面上贴
                 c["rev"] += 1
@@ -266,7 +280,7 @@ if __name__ == "__main__":  # Windows 的 spawn 会让子进程重新执行本�
                  result_of=lambda t: chats.get(t, {}).get("result"))
     child = dbg = None
     try:
-        state["hwnd"] = find_wechat_hwnd()
+        state["hwnd"], state["platform"] = find_chat_hwnd(settings.chat_app())
     except RuntimeError:
             ov.set_capture(False, "未找到聊天窗口，打开后再开启采集")
     else:
