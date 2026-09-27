@@ -41,7 +41,8 @@ _SECTION_PRIORITY = (
     ("心智模型", "思维模型", "mental model"),                                            # 怎么想，最占地方，额度不够先丢它
 )
 
-_MAX_CHARS = 2600      # 不蒸馏时的上限：按上面的优先级拼，超了就丢后面的节
+_MAX_CHARS = 3000      # 不蒸馏时的上限：按上面的优先级拼，超了就丢后面的节（直发，每次都要原价发）
+_INPUT_MAX = 4000      # 蒸馏时的输入上限：先让模型看全再压，输出仍然只有几百字，这里可以宽松
 _DISTILL_CHARS = 400   # 蒸馏的目标字数
 _DISTILL_MAX = 1200    # 模型偶尔写超，硬截到这儿
 _PROMPT_VERSION = "1"  # 改了口吻卡的提示词就 +1，让老缓存失效
@@ -123,7 +124,8 @@ def resolve(name: str, *, distill: bool, protocol: str, base_url: str | None, ke
     card = _read_cache(cache)
     if not card:
         try:
-            card = _distill(_assemble(picked), protocol, base_url, key, model, timeout, headers)[:_DISTILL_MAX]
+            card = _distill(_assemble(picked, _INPUT_MAX), protocol, base_url, key,
+                            model, timeout, headers)[:_DISTILL_MAX]
         except Exception:
             card = ""
         if card:
