@@ -22,7 +22,7 @@ from qfluentwidgets import (
 
 from app import platforms, settings
 from app.version import VERSION
-from core import jev_client, llm, providers
+from core import jev_client, llm, providers, skills
 from core.questions import CHOICE_LABELS
 
 _LOG_LINES = 300
@@ -531,6 +531,31 @@ class Overlay:
         style_label.setBuddy(self.styleEdit)
         box.addWidget(self.styleEdit)
         box.addWidget(self._hint("候选本来就照着你最近发的消息模仿；这里可以再补一句你自己的口吻。"))
+        self._skill_list = skills.list_skills()
+        self._skill_items = self._skill_items_of(settings.skill())
+        skill_label = _label("风格 skill（可选）", 13)
+        box.addWidget(skill_label)
+        self.skillBox = ComboBox()
+        self.skillBox.setMinimumWidth(0)
+        self.skillBox.addItems([name for name, _ in self._skill_items])
+        self.skillBox.setAccessibleName("风格 skill")
+        self.skillBox.currentIndexChanged.connect(self._skill_changed)
+        skill_label.setBuddy(self.skillBox)
+        box.addWidget(self.skillBox)
+        self.skillHint = self._hint(self._skill_hint_text(""))
+        distill_row = QHBoxLayout()
+        distill_row.addWidget(_label("蒸馏 skill", 13), 1)
+        self.distillSwitch = SwitchButton()
+        self.distillSwitch.setOnText("开")
+        self.distillSwitch.setOffText("关")
+        self.distillSwitch.setAccessibleName("蒸馏 skill")
+        distill_row.addWidget(self.distillSwitch)
+        box.addLayout(distill_row)
+        box.addWidget(self._hint(
+            "开：用起草模型把它压成几百字的口吻卡，缓存在 skills/.cache/（改文档或换模型自动重算；"
+            "只存 skill 自己的文字，不含聊天内容）。关：直接用原文取节，长得多、每次都要原价发。"
+            "选中的这段拼在提示词最前面当稳定前缀，DeepSeek 这类自动前缀缓存能命中。"
+        ))
         context_label = _label("参考上下文", 13)
         box.addWidget(context_label)
         self.contextBox = SpinBox()
@@ -631,6 +656,46 @@ class Overlay:
         label = _label(text, 12, _MUTED)
         self._hintLabels.append(label)
         return label
+
+    def _skill_of(self, index):
+        """下拉当前项对应的 skill 目录名（"不使用" 是空串）。"""
+        return self._skill_items[index][1] if 0 <= index < len(self._skill_items) else ""
+
+    def _skill_hint_text(self, key):
+        """选中项的说明：原文多少字、取的是哪些节。读不到就说读不到。"""
+        if not key:
+            return ("从 skills/ 目录（跟 config.json 放一起）挑一份风格文档，只取「怎么说」的节；"
+                    "目录里没有就一直是「不使用」。")
+        s = next((x for x in self._skill_list if x.key == key), None)
+        if s is None:
+            return f"skills/{key} 读不到了（改名或删了？），保存后会退回「不使用」。"
+        return (f"skills/{key}/SKILL.md：原文 {s.chars} 字，只取表达层那几节，"
+                "身份卡 / 时间线 / 调研来源一律丢掉。")
+
+    def _skill_changed(self, index):
+        self.skillHint.setText(self._skill_hint_text(self._skill_of(index)))
+
+    def _skill_items_of(self, keep):
+        """下拉项 = 「不使用」+ 扫到的 skill。keep 是配置里存着、这次却没扫到的目录名：
+        留一项带「读不到」的，别让一次「打开设置页 + 保存」把配置悄悄抹了。"""
+        items = [("不使用", "")] + [(s.title, s.key) for s in self._skill_list]
+        if keep and keep not in [k for _, k in items]:
+            items.append((f"{keep}（读不到）", keep))
+        return items
+
+    def _reload_skills(self):
+        """每次打开设置页重扫一遍 skills/：新拷进来的 skill 不用重启就能选。"""
+        current = self._skill_of(self.skillBox.currentIndex()) or settings.skill()
+        self._skill_list = skills.list_skills()
+        items = self._skill_items_of(current)
+        if items == self._skill_items:
+            return
+        self._skill_items = items
+        self.skillBox.blockSignals(True)  # 重填会带着 index 变，别触发一遍说明刷新
+        self.skillBox.clear()
+        self.skillBox.addItems([name for name, _ in items])
+        self.skillBox.setCurrentIndex(next((i for i, (_, k) in enumerate(items) if k == current), 0))
+        self.skillBox.blockSignals(False)
 
     def _model_group(self, box, title, kind, table):
         """一组「来源 / 密钥 / 模型」控件，判断和起草各一份。table 是 core/providers.py 里那张表。"""
@@ -787,6 +852,10 @@ class Overlay:
         self.relEdit.setText(relationship if _RELATIONSHIPS[index][1] is None else "")
         self.relEdit.setVisible(_RELATIONSHIPS[index][1] is None)
         self.styleEdit.setText(settings.style())
+        self.skillBox.setCurrentIndex(next((i for i, (_, k) in enumerate(self._skill_items)
+                                            if k == settings.skill()), 0))
+        self._skill_changed(self.skillBox.currentIndex())  # index 没变时上面的信号不响，说明文案得自己刷
+        self.distillSwitch.setChecked(settings.skill_distill())
         self.contextBox.setValue(settings.context())
         self.targetSwitch.setChecked(settings.reply_target())
         self._set_group(self.jev, settings.jev_provider(), settings.jev_model())
@@ -835,7 +904,9 @@ class Overlay:
                           style_text=self.styleEdit.text().strip(),
                           thinking_on=self.thinkingSwitch.isChecked(),
                           check_update_on=self.updateSwitch.isChecked(),
-                          chat_app_text=_CHAT_APPS[self.chatAppBox.currentIndex()])
+                          chat_app_text=_CHAT_APPS[self.chatAppBox.currentIndex()],
+                          skill_text=self._skill_of(self.skillBox.currentIndex()),
+                          skill_distill_on=self.distillSwitch.isChecked())
         except Exception:
             self._settings_feedback("保存失败，请检查配置文件是否可写后重试。", error=True)
             return
@@ -868,6 +939,7 @@ class Overlay:
 
     def open_settings(self):
         if self.pages.currentWidget() != self.settingsPage:
+            self._reload_skills()  # 新拷进来的 skill 不用重启就能选
             self._load_settings()
         self.pages.setCurrentWidget(self.settingsPage)
         self.settingsButton.setEnabled(False)

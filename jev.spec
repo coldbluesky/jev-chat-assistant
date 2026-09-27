@@ -13,7 +13,7 @@ hiddenimports = [
     "app.platforms",  # 聊天软件适配表：认窗口、定消息区、判谁说的话都查它
     "app.version", "app.update", "app.debugwin",  # debugwin 是开了调试视图才 import 的
     "core.engine", "core.draft", "core.jev_client", "core.questions", "core.providers",
-    "core.llm",
+    "core.llm", "core.skills",  # skills/ 是用户自己放的，不打包；这里钉的是读它的模块
 ]
 datas, binaries = [], []
 datas += [("docs/wechat-mp.png", "docs")]  # 设置页底部的公众号长条横幅

@@ -126,7 +126,9 @@ def analyze_bg(msgs, title, revision, reply_to=None):
                                    reply_to=reply_to, style=settings.style(),
                                    thinking=settings.thinking(),
                                    jev_provider=settings.jev_provider(),
-                                   jev_model=settings.jev_model() or None),
+                                   jev_model=settings.jev_model() or None,
+                                   skill=settings.skill(),
+                                   skill_distill=settings.skill_distill()),
                      title, revision))
     except Exception as e:
         results.put(("err", f"分析失败: {e}", title, revision))

@@ -54,6 +54,14 @@ def chat_app() -> str:
     v = str(_read("chat_app") or platforms.AUTO)
     return v if v == platforms.AUTO or v in platforms.TABLE else platforms.AUTO
 
+def skill() -> str:
+    """选的风格 skill（skills/ 下的目录名），空 = 不用。只进起草，判断和排序不碰。"""
+    return str(_read("skill") or "")
+
+def skill_distill() -> bool:
+    """skill 用蒸馏出来的口吻卡（默认开：几百字 + 落 skills/.cache/）还是原文取节（长，每次原价发）。"""
+    return bool(_read("skill_distill", True))
+
 def jev_provider() -> str:
     """判断模型走哪家：openrouter（默认）或 typesafe 直连。"""
     v = _read("jev_provider")
@@ -161,7 +169,8 @@ def save(relationship_text: str | None = None, context_n: int | None = None, *,
          draft_base_url_text: str | None = None, reply_target_on: bool | None = None,
          style_text: str | None = None, thinking_on: bool | None = None,
          check_update_on: bool | None = None, debug_view_on: bool | None = None,
-         chat_app_text: str | None = None) -> None:
+         chat_app_text: str | None = None, skill_text: str | None = None,
+         skill_distill_on: bool | None = None) -> None:
     """每个参数为空/None = 保留当前值。两把 key 写进程环境 + HKCU\\Environment，不写任何文件。"""
     jev = jev_provider_text if jev_provider_text in JEV_PROVIDERS else jev_provider()
     draft = draft_provider_text if draft_provider_text in DRAFT_PROVIDERS else draft_provider()
@@ -191,6 +200,7 @@ def save(relationship_text: str | None = None, context_n: int | None = None, *,
         # 认不出的值 = 保留原样，别把一个好配置写成 auto
         "chat_app": (chat_app_text if chat_app_text == platforms.AUTO or chat_app_text in platforms.TABLE
                      else chat_app()),
+        "skill": keep(skill_text, "skill"), "skill_distill": flag(skill_distill_on, skill_distill),
         "thinking": flag(thinking_on, thinking),
         "check_update": flag(check_update_on, check_update),
         "debug_view": flag(debug_view_on, debug_view),
