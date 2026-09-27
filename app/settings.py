@@ -62,6 +62,10 @@ def skill_distill() -> bool:
     """skill 用蒸馏出来的口吻卡（默认开：几百字 + 落 skills/.cache/）还是原文取节（长，每次原价发）。"""
     return bool(_read("skill_distill", True))
 
+def session_summary() -> bool:
+    """把更早的对话压成背景带上（core/summary.py）：默认开。关了就跟以前一样只看最近 N 条。"""
+    return bool(_read("session_summary", True))
+
 def jev_provider() -> str:
     """判断模型走哪家：openrouter（默认）或 typesafe 直连。"""
     v = _read("jev_provider")
@@ -170,7 +174,7 @@ def save(relationship_text: str | None = None, context_n: int | None = None, *,
          style_text: str | None = None, thinking_on: bool | None = None,
          check_update_on: bool | None = None, debug_view_on: bool | None = None,
          chat_app_text: str | None = None, skill_text: str | None = None,
-         skill_distill_on: bool | None = None) -> None:
+         skill_distill_on: bool | None = None, session_summary_on: bool | None = None) -> None:
     """每个参数为空/None = 保留当前值。两把 key 写进程环境 + HKCU\\Environment，不写任何文件。"""
     jev = jev_provider_text if jev_provider_text in JEV_PROVIDERS else jev_provider()
     draft = draft_provider_text if draft_provider_text in DRAFT_PROVIDERS else draft_provider()
@@ -201,6 +205,7 @@ def save(relationship_text: str | None = None, context_n: int | None = None, *,
         "chat_app": (chat_app_text if chat_app_text == platforms.AUTO or chat_app_text in platforms.TABLE
                      else chat_app()),
         "skill": keep(skill_text, "skill"), "skill_distill": flag(skill_distill_on, skill_distill),
+        "session_summary": flag(session_summary_on, session_summary),
         "thinking": flag(thinking_on, thinking),
         "check_update": flag(check_update_on, check_update),
         "debug_view": flag(debug_view_on, debug_view),

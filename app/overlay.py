@@ -566,6 +566,18 @@ class Overlay:
         box.addWidget(self._hint(
             "生成和判断时看最近这么多条消息。太少会丢上下文，太多会稀释重点，建议 6–12。"
         ))
+        summary_row = QHBoxLayout()
+        summary_row.addWidget(_label("会话摘要", 13), 1)
+        self.summarySwitch = SwitchButton()
+        self.summarySwitch.setOnText("开")
+        self.summarySwitch.setOffText("关")
+        self.summarySwitch.setAccessibleName("会话摘要")
+        summary_row.addWidget(self.summarySwitch)
+        box.addLayout(summary_row)
+        box.addWidget(self._hint(
+            "开：滑出上面这个条数的旧对话会压成一两百字的背景带上，判断和起草都看得见更早说过的事。"
+            "每攒够几条约一次压缩调用（走起草那把 key 和模型），摘要在内存里，不落盘、重启即弃。"
+        ))
         target_row = QHBoxLayout()
         target_row.addWidget(_label("群聊指定回复对象", 13), 1)
         self.targetSwitch = SwitchButton()
@@ -857,6 +869,7 @@ class Overlay:
         self._skill_changed(self.skillBox.currentIndex())  # index 没变时上面的信号不响，说明文案得自己刷
         self.distillSwitch.setChecked(settings.skill_distill())
         self.contextBox.setValue(settings.context())
+        self.summarySwitch.setChecked(settings.session_summary())
         self.targetSwitch.setChecked(settings.reply_target())
         self._set_group(self.jev, settings.jev_provider(), settings.jev_model())
         self._set_group(self.draft, settings.draft_provider(), settings.draft_model())
@@ -906,7 +919,8 @@ class Overlay:
                           check_update_on=self.updateSwitch.isChecked(),
                           chat_app_text=_CHAT_APPS[self.chatAppBox.currentIndex()],
                           skill_text=self._skill_of(self.skillBox.currentIndex()),
-                          skill_distill_on=self.distillSwitch.isChecked())
+                          skill_distill_on=self.distillSwitch.isChecked(),
+                          session_summary_on=self.summarySwitch.isChecked())
         except Exception:
             self._settings_feedback("保存失败，请检查配置文件是否可写后重试。", error=True)
             return

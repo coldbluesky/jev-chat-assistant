@@ -250,10 +250,11 @@ def guidance_text(answers: dict) -> str:
 
 
 def build_state(messages: list, relationship: str, keep: int = 10,
-                reply_to: str | None = None) -> dict:
+                reply_to: str | None = None, summary: str = "") -> dict:
     """messages: (from, text) / (from, text, name) / dict（name 可选）。from 只认 her/me。
 
     name = 群里的发言人；有 name 就当群聊（chat.is_group）。reply_to = 群里指定的回复对象。
+    summary = 更早那些已经滑出 keep 条的对话压成的背景（core/summary.py），空就不带这个字段。
     """
     cleaned = []
     for item in messages:
@@ -276,6 +277,9 @@ def build_state(messages: list, relationship: str, keep: int = 10,
         "latest_from": latest_from,
         "is_group": any("name" in m for m in cleaned),
     }
+    if summary and summary.strip():
+        # 更早的对话：Jev 的题都是「她最新这条什么意思」，这段只是让它在有背景的情况下判断
+        chat["summary"] = summary.strip()
     if reply_to:
         chat["reply_to"] = str(reply_to)
     return {"chat": chat}

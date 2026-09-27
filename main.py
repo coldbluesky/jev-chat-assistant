@@ -11,18 +11,18 @@ import multiprocessing
 import queue
 import threading
 import traceback
-from collections import deque
-
 from app import platforms, settings, update, worker
 from app.capture import find_chat_hwnd, window_alive
 from app.fill import fill
 from app.overlay import Overlay
 from app.version import VERSION
 from core.engine import analyze
+from core.summary import plan as summary_plan, trim as summary_trim
 
 # {会话名: {history, result, rev, target, senders}}：每个会话各自的上下文、上次结果和版本号，互不串味
 # history 里是 [(who, text, name)]，engine 只认 her/me，name 是群里的发言人（单聊/自己说的是 None）；
-# 只是缓冲区，实际喂模型几条由设置里的「参考上下文」决定
+# 是个不设上限的 list：窗口外的部分会被压进 summary（core/summary.py），压缩完把已进摘要的原文裁掉
+# summary / summarized：更早的对话压成的一段背景 + 它已经覆盖到 history 的第几条（下标从 0 数）
 # senders：这个群里发过言的人，去重、最近的排最前；target：用户挑的回复对象（None = 跟着最近那个走）
 chats = {}
 state = {"area": None, "busy": False, "rerun": None, "hwnd": None, "platform": None, "chat": ""}
@@ -31,8 +31,20 @@ update_result = queue.Queue()  # 独立小队列，别跟 results 的 (kind, r, 
 
 
 def chat_of(title):
-    return chats.setdefault(title, {"history": deque(maxlen=60), "result": None, "rev": 0,
-                                    "target": None, "senders": []})
+    return chats.setdefault(title, {"history": [], "result": None, "rev": 0, "target": None,
+                                    "senders": [], "summary": "", "summarized": 0})
+
+
+def store_summary(title, r):
+    """收下一次压缩的结果：摘要存回去、进度往前推、早已进摘要的原文裁掉。
+    过期的结果也照样收——压缩费都花了，别白扔。"""
+    folded = int(r.get("summarized") or 0)
+    if not folded:
+        return
+    chat = chat_of(title)
+    chat["summary"] = r.get("summary") or ""
+    chat["summarized"] = summary_trim(chat["history"], chat["summarized"] + folded)
+    ov.log(f"更早的 {folded} 条对话已压成摘要")
 
 
 def target_of(title):
@@ -116,7 +128,7 @@ def on_toggle_capture(on):
     capture_on.set()
 
 
-def analyze_bg(msgs, title, revision, reply_to=None):
+def analyze_bg(msgs, title, revision, reply_to=None, summary="", pending=None):
     """后台线程只跑网络调用，结果丢队列；UI 只在主线程的 tick 里动（Qt 不能跨线程碰）。"""
     try:
         results.put(("ok", analyze(msgs, settings.relationship(), context=settings.context(),
@@ -128,7 +140,8 @@ def analyze_bg(msgs, title, revision, reply_to=None):
                                    jev_provider=settings.jev_provider(),
                                    jev_model=settings.jev_model() or None,
                                    skill=settings.skill(),
-                                   skill_distill=settings.skill_distill()),
+                                   skill_distill=settings.skill_distill(),
+                                   summary=summary, pending=pending),
                      title, revision))
     except Exception as e:
         results.put(("err", f"分析失败: {e}", title, revision))
@@ -150,8 +163,13 @@ def start_analyze(title, msgs):
         return
     state["busy"] = True
     ov.set_busy(True)
+    chat = chat_of(title)
+    # 窗口外、还没进摘要的旧对话：攒够了就跟着这次一起压；摘要开关关着就完全不碰
+    pending = summary_plan(chat["history"], chat["summarized"], settings.context()) \
+        if settings.session_summary() else []
     reply_to = target_of(title) if settings.reply_target() else None  # 开关关着就是今天的行为
-    threading.Thread(target=analyze_bg, args=(msgs, title, chat_of(title)["rev"], reply_to),
+    threading.Thread(target=analyze_bg,
+                     args=(msgs, title, chat["rev"], reply_to, chat["summary"], pending),
                      daemon=True).start()
 
 
@@ -249,6 +267,8 @@ def tick():
         while not results.empty():
             kind, r, title, revision = results.get()
             state["busy"] = False
+            if kind == "ok":  # 摘要跟版本无关：先把压缩结果收掉，再决定这份候选还要不要
+                store_summary(title, r)
             if state["rerun"]:  # 分析期间又来了新消息，接着跑最新的
                 (t, msgs), state["rerun"] = state["rerun"], None
                 start_analyze(t, msgs)

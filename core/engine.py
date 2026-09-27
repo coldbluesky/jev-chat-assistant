@@ -6,13 +6,17 @@
 from __future__ import annotations
 
 try:
-    from .draft import draft_candidates
-    from .jev_client import JevError, ask
+    from .draft import _line, draft_candidates
+    from .jev_client import JevError, _api_key, ask
+    from .providers import DRAFT_PROVIDERS, LLM_ENV
     from .questions import JUDGE_QUESTIONS, build_rank_question, build_state, guidance_text
+    from .summary import update as update_summary
 except ImportError:
-    from draft import draft_candidates
-    from jev_client import JevError, ask
+    from draft import _line, draft_candidates
+    from jev_client import JevError, _api_key, ask
+    from providers import DRAFT_PROVIDERS, LLM_ENV
     from questions import JUDGE_QUESTIONS, build_rank_question, build_state, guidance_text
+    from summary import update as update_summary
 
 _REPLY_IDX = {"reply_a": 0, "reply_b": 1, "reply_c": 2}
 
@@ -28,7 +32,8 @@ def analyze(messages: list, relationship: str, model: str | None = None,
             base_url: str | None = None, reply_to: str | None = None, style: str = "",
             thinking: bool = False, jev_provider: str = "openrouter",
             jev_model: str | None = None, skill: str = "",
-            skill_distill: bool = True) -> dict:
+            skill_distill: bool = True, summary: str = "",
+            pending: list | None = None) -> dict:
     """messages: [(from, text)] from ∈ {her, me}，最新一条在最后；
     群聊里可以带第三项 name（说这句话的人），单聊不带。
     context: 起草和判断各看最近多少条消息（用户设置里的「参考上下文」）。
@@ -39,6 +44,9 @@ def analyze(messages: list, relationship: str, model: str | None = None,
     thinking: 起草时是否开思考模式，只影响起草，默认关。
     skill / skill_distill: 风格 skill 和用不用蒸馏版（core/skills.py），空 = 不用。
     只影响起草：判断那 7 道题和最后排序都是 Jev 的固定口径，不能被风格带偏。
+    summary / pending: 更早的对话压成的背景 + 这一批要折进去的（已经滑出 context 窗口的旧消息，
+    core/summary.py）。pending 非空就先压一次，判断和起草都用压完的摘要；压不动就照旧用传进来的
+    summary，pending 下次再试。返回里带 summary（新的）和 summarized（这次折进去几条），调用方存回去。
     model / jev_model = None 用该来源的默认模型。
 
     返回 {candidates, best_index, best_reply, scores, answers, usage, reply_to}。
@@ -48,7 +56,22 @@ def analyze(messages: list, relationship: str, model: str | None = None,
     三段式（issue #4）：先让 Jev 答 7 道判断题，把判断当小抄喂给起草，最后 Jev 只排序。
     判断那次挂了就退回老路：盲起草 + 判断和排序一次问完，行为跟以前一样。usage 是两次之和。
     """
-    state = build_state(messages, relationship, keep=context, reply_to=reply_to)
+    # 更早的对话先折进摘要：judge 和起草都要看它。这一步挂了不连累这一次分析——
+    # 照旧用旧摘要，pending 留着下次再试（返回的 summarized=0 让调用方别推进进度）。
+    folded = 0
+    if pending:
+        spec = DRAFT_PROVIDERS[provider]
+        try:
+            summary = update_summary(summary, [_line(m) for m in pending],
+                                     protocol=spec.protocol, base_url=base_url or spec.base,
+                                     key=_api_key(LLM_ENV), model=model or spec.default,
+                                     timeout=timeout, headers=spec.headers)
+            folded = len(pending)
+        except JevError:
+            pass
+
+    state = build_state(messages, relationship, keep=context, reply_to=reply_to,
+                        summary=summary)
     usage: dict = {}
     answers: dict = {}
     judged = False
@@ -65,7 +88,7 @@ def analyze(messages: list, relationship: str, model: str | None = None,
                                   base_url=base_url, timeout=timeout, keep=context,
                                   reply_to=reply_to, style=style, thinking=thinking,
                                   guidance=guidance_text(answers) if judged else None,
-                                  skill=skill, skill_distill=skill_distill)
+                                  summary=summary, skill=skill, skill_distill=skill_distill)
     if not candidates:  # 注入过滤可以把起草结果全扔掉；接着取 [0] 会 IndexError
         raise JevError("起草结果没有可用候选回复")
 
@@ -104,6 +127,8 @@ def analyze(messages: list, relationship: str, model: str | None = None,
         "answers": answers,
         "usage": usage,
         "reply_to": reply_to,
+        "summary": summary,     # 新的摘要（没传 pending 时就是原样传回来的那个）
+        "summarized": folded,   # 这次折进去几条；0 = 没压或者没压成，调用方别推进进度
     }
 
 
