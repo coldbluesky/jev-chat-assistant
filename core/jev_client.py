@@ -19,11 +19,18 @@ from typing import NoReturn
 try:  # 当模块导入 / 当脚本直接跑 都能用
     from .providers import (ENV_VARS, JEV_ENV, JEV_PROVIDERS, LEGACY,
                             OPENROUTER_DECISIONS, OPENROUTER_KEY_URL, TYPESAFE_BASE)
+    from .questions import JUDGE_QUESTIONS, build_state
 except ImportError:
     from providers import (ENV_VARS, JEV_ENV, JEV_PROVIDERS, LEGACY,
                            OPENROUTER_DECISIONS, OPENROUTER_KEY_URL, TYPESAFE_BASE)
+    from questions import JUDGE_QUESTIONS, build_state
 
 MAX_RETRIES = 3
+
+# 设置页「测试」用：跟 engine 同一个形状的最小 state（直接问 build_state 要，别手抄一份），
+# 题只留一道最省的——自检只要验 key / 模型名 / 网络通不通，犯不上花一整轮 7 道判断的钱。
+PING_STATE = build_state([("her", "在吗")], "self check")
+PING_QUESTIONS = {"literal_question": JUDGE_QUESTIONS["literal_question"]}
 
 
 class JevError(Exception):
@@ -83,6 +90,20 @@ def _error_body(exc: urllib.error.HTTPError) -> str:
     except Exception:
         raw = ""
     return redact_secrets(raw)[:800]
+
+
+def check(provider: str, key: str, model: str | None = None, timeout: float = 20) -> None:
+    """设置页的「测试」：拿给的 key / 模型打一次最小真实判断（就一道题），
+    验密钥、模型名、网络通不通。成功返回 None，失败照旧抛 JevError（消息已脱敏）。
+    key 由设置页传进来——用户可能还没保存，环境变量里不一定有。"""
+    if not (key or "").strip():
+        raise JevError(f"{JEV_ENV} 还没填")
+    spec = JEV_PROVIDERS.get(provider) or JEV_PROVIDERS["openrouter"]
+    target = model or spec.default
+    if provider == "typesafe":
+        _ask_typesafe(PING_STATE, PING_QUESTIONS, key, target, timeout)
+    else:
+        _ask_openrouter(PING_STATE, PING_QUESTIONS, key, target, timeout)
 
 
 def ask(state: dict, questions: dict, timeout: float = 20,
@@ -350,6 +371,26 @@ if __name__ == "__main__":
             raise SystemExit("应当抛错")
         except JevError as e:
             assert "HTTP 429" in str(e) and "rate limited" in str(e)
+
+    # 设置页「测试」：两条路各打一次最小判断，key / 模型 / 题都得到位
+    with patch.object(typesafe_sdk, "TypeSafeClient", _FakeClient):
+        check("typesafe", "ts-key", "jev-1.13.0")
+        assert seen["init"] == {"api_key": "ts-key", "base_url": TYPESAFE_BASE,
+                               "model": "jev-1.13.0", "timeout": 20}
+    assert seen["kw"] == {"model": "jev-1.13.0"} and seen["questions"] is PING_QUESTIONS
+    assert PING_QUESTIONS == {"literal_question": JUDGE_QUESTIONS["literal_question"]}  # 就一道题
+    assert PING_STATE["chat"]["messages"] == [{"from": "her", "text": "在吗"}]
+    with patch.object(urllib.request, "urlopen", _fake_urlopen):
+        check("openrouter", "or-key")  # 不给模型 = 用该来源默认的
+    assert seen["url"] == OPENROUTER_DECISIONS
+    assert seen["body"] == {"model": "typesafe/jev-1.13", "state": PING_STATE,
+                            "questions": PING_QUESTIONS}
+    for empty in ("", "   "):
+        try:
+            check("openrouter", empty)
+            raise SystemExit("应当抛错")
+        except JevError as e:
+            assert JEV_ENV in str(e)  # 没填 key 就地拦下，别打到网上
 
     assert redact_secrets("key=ts-key or-key") == "key=[REDACTED] [REDACTED]"
     print("jev_client ok")

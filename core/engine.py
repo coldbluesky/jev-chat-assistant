@@ -31,7 +31,7 @@ def analyze(messages: list, relationship: str, model: str | None = None,
             timeout: float = 30, context: int = 10, provider: str = "deepseek",
             base_url: str | None = None, reply_to: str | None = None, style: str = "",
             thinking: bool = False, jev_provider: str = "openrouter",
-            jev_model: str | None = None, skill: str = "",
+            jev_model: str | None = None, jev_judge: bool = True, skill: str = "",
             skill_distill: bool = True, summary: str = "",
             pending: list | None = None) -> dict:
     """messages: [(from, text)] from ∈ {her, me}，最新一条在最后；
@@ -39,6 +39,8 @@ def analyze(messages: list, relationship: str, model: str | None = None,
     context: 起草和判断各看最近多少条消息（用户设置里的「参考上下文」）。
     provider: 起草走哪家（core.providers.DRAFT_PROVIDERS），base_url 只有自定义来源要传。
     jev_provider / jev_model: 判断和排序走哪家、哪个模型（core.providers.JEV_PROVIDERS）。
+    jev_judge: 判断这一环开不开（设置里的「判断 · Jev」）。关掉就一次都不问 Jev，直接盲起草，
+    返回的 answers 是空的、scores 全 0、best_index 0——界面据此不显示「对话参考」那张卡。
     reply_to: 群聊里指定回复给谁；None = 正常回复。
     style: 用户自己描述的说话风格，只影响起草。
     thinking: 起草时是否开思考模式，只影响起草，默认关。
@@ -55,6 +57,7 @@ def analyze(messages: list, relationship: str, model: str | None = None,
 
     三段式（issue #4）：先让 Jev 答 7 道判断题，把判断当小抄喂给起草，最后 Jev 只排序。
     判断那次挂了就退回老路：盲起草 + 判断和排序一次问完，行为跟以前一样。usage 是两次之和。
+    jev_judge=False 时不走这条：只有一次起草调用，没有小抄也没有排序。
     """
     # 更早的对话先折进摘要：judge 和起草都要看它。这一步挂了不连累这一次分析——
     # 照旧用旧摘要，pending 留着下次再试（返回的 summarized=0 让调用方别推进进度）。
@@ -75,14 +78,15 @@ def analyze(messages: list, relationship: str, model: str | None = None,
     usage: dict = {}
     answers: dict = {}
     judged = False
-    try:
-        first = ask(state, dict(JUDGE_QUESTIONS), timeout=timeout,
-                    provider=jev_provider, model=jev_model)
-        answers = first.get("answers") or {}
-        _add_usage(usage, first.get("usage"))
-        judged = True
-    except JevError:
-        pass  # 退回盲起草 + 老的一次合问；错误不打日志（里面可能带请求内容）
+    if jev_judge:  # 关掉判断这一环就一次都不问 Jev：下面照旧盲起草，也没有排序
+        try:
+            first = ask(state, dict(JUDGE_QUESTIONS), timeout=timeout,
+                        provider=jev_provider, model=jev_model)
+            answers = first.get("answers") or {}
+            _add_usage(usage, first.get("usage"))
+            judged = True
+        except JevError:
+            pass  # 退回盲起草 + 老的一次合问；错误不打日志（里面可能带请求内容）
 
     candidates = draft_candidates(messages, relationship, provider=provider, model=model,
                                   base_url=base_url, timeout=timeout, keep=context,
@@ -92,9 +96,11 @@ def analyze(messages: list, relationship: str, model: str | None = None,
     if not candidates:  # 注入过滤可以把起草结果全扔掉；接着取 [0] 会 IndexError
         raise JevError("起草结果没有可用候选回复")
 
-    questions = {} if judged else dict(JUDGE_QUESTIONS)
-    if len(candidates) >= 2:  # 起草只给了 1 条就没什么可排的，判断题照问
-        questions.update(build_rank_question(candidates))
+    questions = {}
+    if jev_judge:
+        questions = {} if judged else dict(JUDGE_QUESTIONS)
+        if len(candidates) >= 2:  # 起草只给了 1 条就没什么可排的，判断题照问
+            questions.update(build_rank_question(candidates))
     if questions:
         try:
             second = ask(state, questions, timeout=timeout,
@@ -143,4 +149,21 @@ if __name__ == "__main__":
             raise SystemExit("应当抛错")
         except JevError as e:
             assert "没有可用候选" in str(e)
+
+    # 关掉判断：Jev 一次都不能问（ask 被调用就直接炸），起草照走，排序/小抄/分数全没有
+    seen: dict = {}
+
+    def fake_draft(messages, relationship, **kw):
+        seen.update(kw)
+        return ["甲", "乙", "丙"]
+
+    def must_not_ask(*a, **kw):
+        raise AssertionError("jev_judge=False 时不该问 Jev")
+
+    with patch("__main__.ask", must_not_ask), \
+         patch("__main__.draft_candidates", fake_draft):
+        r = analyze([("her", "hello"), ("me", "在")], "friends", jev_judge=False)
+    assert r["candidates"] == ["甲", "乙", "丙"] and r["best_index"] == 0
+    assert r["answers"] == {} and r["scores"] == [0.0, 0.0, 0.0] and r["usage"] == {}
+    assert seen["guidance"] is None  # 没判断就没有小抄
     print("engine ok")

@@ -38,8 +38,8 @@ def read_title(header):
 
 def who_said(chat, box, platform=platforms.DEFAULT):
     """按 OCR 框里的颜色分类。返回 (谁, 底色, 墨高)：
-    先看底色平不平：框里众数颜色占比 <45% 就是图片（头像/照片/表情包）里的字 → None 丢掉。
-    自己的气泡底色 → me（微信绿泡、企业微信彩色泡，见 platforms.is_me_bubble；
+    先看底色平不平：框**边框那一圈**众数颜色占比 <60% 就是图片（头像/照片/表情包）里的字 → None 丢掉。
+    自己的气泡底色 → me（微信绿泡、企业微信蓝泡——淡蓝也算，见 platforms.is_me_bubble；
     配置里要了 me_right 的话，气泡还得偏右，不然算对方——多防一层认错人）；
     非 me 且文字对底色对比度 ≥150 → her；其余（引用块、群里的发言人名、时间戳、系统提示、
     链接卡片描述——都是灰字，对比度 80~95）→ "gray"。
@@ -49,11 +49,14 @@ def who_said(chat, box, platform=platforms.DEFAULT):
     reg = chat[int(min(ys)):int(max(ys)), int(min(xs)):int(max(xs))].astype(int)
     if reg.size == 0:
         return None, None, 0
-    vals, cnt = np.unique(reg.reshape(-1, 3), axis=0, return_counts=True)
+    # 底色看边框那一圈，不看整框：框卡得很紧，正文（企业微信再叠一层水印）就占掉一半以上，
+    # 整框众数占比实测只有 0.26~0.55，按旧口径 <45% 判会把正常消息全当成图片里的字扔掉。
+    # 这一圈的众数同时给出更准的底色：实拍消息框这一圈 0.84~1.00 是同一个底色。
+    edge = np.concatenate([reg[0], reg[-1], reg[:, 0], reg[:, -1]])
+    vals, cnt = np.unique(edge, axis=0, return_counts=True)
     bg = vals[cnt.argmax()]
-    if cnt.max() / reg.shape[0] / reg.shape[1] < 0.45:
-        # 文字必须落在平底色上：WGC 帧是精确像素，气泡/面板里众数颜色占 0.56~0.82，
-        # 头像/照片/表情包里只有 0.1~0.3——那是图片里的字（头像上的「借仲夏夜之梦」之类），不是消息。
+    if cnt.max() / len(edge) < 0.6:
+        # 字必须落在平底色上：边框一圈都不平 = 字印在图片上（头像上的「借仲夏夜之梦」之类），不是消息。
         # ponytail: 只对精确像素的帧成立；缩放/压缩过的截图（比如拿预览窗再截一次的图）底色会糊成几百种颜色，全会被当图片。
         return None, bg, 0
     diff = np.abs(reg @ [0.299, 0.587, 0.114] - bg @ [0.299, 0.587, 0.114])

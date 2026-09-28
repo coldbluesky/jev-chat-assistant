@@ -45,7 +45,8 @@ def context() -> int:
     return max(3, min(30, n))
 
 def style() -> str:
-    """用户自己描述的说话风格（可选，自由文本），只喂给起草模型。默认空 = 只照着最近的消息模仿。"""
+    """用户自己描述的说话风格（可选，自由文本），只喂给起草模型。默认空 = 只照着最近的消息模仿。
+    选了风格 skill 时这一项用不上：口吻按 skill 那份文档来（见 core/draft.draft_candidates）。"""
     return str(_read("style") or "")
 
 def chat_app() -> str:
@@ -94,6 +95,11 @@ def draft_base_url() -> str:
 def reply_target() -> bool:
     """群聊指定回复对象：开了才在界面上选回复给谁、才把对象喂给模型。默认关。"""
     return bool(_read("reply_target", False))
+
+def jev_judge() -> bool:
+    """判断这一环开不开。关掉就不问 Jev（判断和排序都不问），直接让起草模型盲写三条：
+    少一次调用、也少一块钱，代价是没有「对话参考」那张卡。默认开。"""
+    return bool(_read("jev_judge", True))
 
 def thinking() -> bool:
     """起草时是否开思考模式：慢且贵，默认关。只有 DeepSeek / OpenRouter / Anthropic / Gemini 吃它。"""
@@ -174,7 +180,8 @@ def save(relationship_text: str | None = None, context_n: int | None = None, *,
          style_text: str | None = None, thinking_on: bool | None = None,
          check_update_on: bool | None = None, debug_view_on: bool | None = None,
          chat_app_text: str | None = None, skill_text: str | None = None,
-         skill_distill_on: bool | None = None, session_summary_on: bool | None = None) -> None:
+         skill_distill_on: bool | None = None, session_summary_on: bool | None = None,
+         jev_judge_on: bool | None = None) -> None:
     """每个参数为空/None = 保留当前值。两把 key 写进程环境 + HKCU\\Environment，不写任何文件。"""
     jev = jev_provider_text if jev_provider_text in JEV_PROVIDERS else jev_provider()
     draft = draft_provider_text if draft_provider_text in DRAFT_PROVIDERS else draft_provider()
@@ -206,6 +213,7 @@ def save(relationship_text: str | None = None, context_n: int | None = None, *,
                      else chat_app()),
         "skill": keep(skill_text, "skill"), "skill_distill": flag(skill_distill_on, skill_distill),
         "session_summary": flag(session_summary_on, session_summary),
+        "jev_judge": flag(jev_judge_on, jev_judge),
         "thinking": flag(thinking_on, thinking),
         "check_update": flag(check_update_on, check_update),
         "debug_view": flag(debug_view_on, debug_view),

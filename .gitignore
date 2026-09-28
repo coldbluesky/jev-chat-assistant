@@ -18,3 +18,5 @@ wechat_probe.png
 build/
 dist/
 *.spec.bak
+# 本机跑起来的那一份（exe + _internal + 它自己的 config.json / skills），不进仓库
+run/

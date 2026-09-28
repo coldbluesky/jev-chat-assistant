@@ -69,6 +69,22 @@ def unminimize(hwnd):
     return True
 
 
+def _vlines(isbg, x0, x1, ytop, ybot, min_frac):
+    """面板里「又长又细、左右都是底色」的竖线 → {列号: 这条线从哪一行开始}。
+    右侧栏的分界线、输入框的左右边框都是这种线；气泡和图片的边不是——它们里侧紧挨着也是非底色。
+    min_frac = 这条线至少要占到竖条的多长（短色带、头像列都过不了这一关）。
+    用比例不用「整段连续」：企业微信的水印横着糊在画面上，连续判据会被打断。"""
+    band = isbg[ytop:ybot, max(0, x0 - 2):x1 + 2]
+    if band.shape[0] < 40 or band.shape[1] < 7:
+        return {}
+    own = (1.0 - band[:, 2:-2].mean(0)) >= min_frac  # 这一列自己基本不是底色 = 是根线
+    left_bg = band[:, :-4].mean(0) >= 0.6            # 左边两列基本是底色
+    right_bg = band[:, 4:].mean(0) >= 0.6            # 右边两列基本是底色
+    ok = own & left_bg & right_bg
+    return {max(0, x0 - 2) + 2 + int(i): ytop + int(np.argmax(~band[:, 2 + i]))
+            for i in np.where(ok)[0]}
+
+
 def chat_area(full, platform=platforms.DEFAULT):
     """消息列表区 (x0, y_top, x1, y_in, 面板底色, y_pane)，全靠像素锚点，不写死坐标，深浅主题通用：
     - 面板底色 = 右半边最常见的颜色（抽样算，全量 np.unique 在 2560 宽的图上要半秒）
@@ -86,6 +102,14 @@ def chat_area(full, platform=platforms.DEFAULT):
     col = isbg[H // 4: H * 3 // 4].mean(0)
     x0 = int(np.argmax(col > platform.panel_col))
     x1 = W - int(np.argmax(col[::-1] > platform.panel_col))
+    # 右侧栏（企业微信群聊右边那列群成员/群看板）底色跟消息区几乎一样，会被算进面板里。多截半屏
+    # 是小事，把整行分隔线检测带崩才是大事：消息区底线会一路掉到输入框底下（「快速会议」「发送(S)」
+    # 被当成消息读出来），那几行的 y 比真消息都大，新消息反而被判成「已经在上面了」直接丢掉。
+    # 所以先找那条把它隔开的长竖线，把右边界收到线上。找不到就原样——微信这边没这条线。
+    divider = [c for c in _vlines(isbg, x0, x1, H // 5, H * 4 // 5, 0.75)
+               if c > x0 + (x1 - x0) * 0.45]
+    if divider:
+        x1 = min(divider)
     row = isbg[:, x0:x1].mean(1)
     y0 = int(np.argmax(row > platform.panel_row))
     y1 = H - int(np.argmax(row[::-1] > platform.panel_row))

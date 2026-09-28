@@ -111,6 +111,16 @@ def _gemini(base_url, api_key, model, system, user_turns, temperature, max_token
     return resp.text or ""
 
 
+def check(protocol: str, base_url: str | None, api_key: str, model: str, *,
+          extra_body: dict | None = None, headers: dict | None = None,
+          timeout: float = 20) -> None:
+    """设置页的「测试」：发一轮最小真实对话，验密钥 / 模型名 / 地址通不通。
+    成功返回 None，失败照旧抛 JevError（消息已脱敏）。key 由设置页传进来——用户可能还没保存，
+    环境变量里不一定有。max_tokens 压到最小，就为拿一次真实往返。"""
+    chat(protocol, base_url, api_key, model, "只回一个 ok。", ["在吗"],
+         temperature=0, max_tokens=16, extra_body=extra_body, headers=headers, timeout=timeout)
+
+
 def list_models(protocol: str, base_url: str | None, api_key: str,
                 timeout: float = 10, headers: dict | None = None) -> list[str]:
     """某个地址上能用的模型 id，去重排序。失败抛 JevError，消息直接显示在设置页上。"""
@@ -240,6 +250,21 @@ if __name__ == "__main__":
     assert seen["openai.init"]["default_headers"] == {"User-Agent": "jev-chat-windows"}
     assert list_models("anthropic", "", "k") == ["claude-x", "claude-y"]
     assert list_models("gemini", "", "k") == ["gemini-1", "gemini-2"]
+
+    # 设置页「测试」：最省的一轮 chat，但该带的字段（地址/key/模型/思考开关/额外头）一个不少
+    check("openai", "https://api.deepseek.com", "sk-ds", "deepseek-flash",
+          extra_body={"thinking": {"type": "disabled"}})
+    assert seen["openai.init"]["base_url"] == "https://api.deepseek.com"
+    assert seen["openai.init"]["api_key"] == "sk-ds"
+    assert seen["openai.call"]["model"] == "deepseek-flash"
+    assert seen["openai.call"]["temperature"] == 0 and seen["openai.call"]["max_tokens"] == 16
+    assert seen["openai.call"]["extra_body"] == {"thinking": {"type": "disabled"}}
+    check("anthropic", "", "sk-an", "claude-x", headers={"User-Agent": "jev-chat-windows"})
+    assert seen["anthropic.call"]["model"] == "claude-x"
+    assert "thinking" not in seen["anthropic.call"]  # 测试不开思考
+    check("gemini", "https://my.proxy", "k", "gemini-2")
+    assert seen["gemini.init"]["http_options"].base_url == "https://my.proxy"
+    assert seen["gemini.call"]["config"].thinking_config.thinking_budget == 0
 
     # 出错 → 一句人话的 JevError，带上状态码，不泄露 key
     os.environ["DEEPSEEK_API_KEY"] = "sk-secret"

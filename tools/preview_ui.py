@@ -5,11 +5,12 @@
     python tools/preview_ui.py --state ready --screenshot docs/ui_home.png
 
 演示设置只保存在内存，不读取真实密钥，也不修改环境变量或 config.json。
-「获取模型」按钮也走得通：两个列模型的接口都被换成了本地假列表，全程不联网。
+「获取模型」和「测试」两个按钮也走得通：列模型、测模型都换成了本地假实现，全程不联网。
 """
 from __future__ import annotations
 
 import argparse
+import time
 from pathlib import Path
 from unittest.mock import patch
 
@@ -118,13 +119,14 @@ def main() -> int:
                      "draft_provider": "deepseek", "draft_model": "deepseek-flash",
                      "draft_base_url": "", "reply_target": True,
                      "style": "话少，基本不用标点，急了才发感叹号", "thinking": False,
-                     "check_update": True, "debug_view": args.state == "debug"}
+                     "check_update": True, "debug_view": args.state == "debug",
+                     "jev_judge": True}
 
     def save_demo_settings(relationship_text=None, context_n=None, *, jev_provider_text=None,
                            jev_key_text=None, jev_model_text=None, draft_provider_text=None,
                            llm_key_text=None, draft_model_text=None, draft_base_url_text=None,
                            reply_target_on=None, style_text=None, thinking_on=None,
-                           check_update_on=None, debug_view_on=None):
+                           check_update_on=None, debug_view_on=None, jev_judge_on=None):
         if relationship_text:
             demo_settings["relationship"] = relationship_text
         if context_n is not None:
@@ -138,7 +140,8 @@ def main() -> int:
             if key:
                 demo_settings[name] = key
         for name, value in (("reply_target", reply_target_on), ("thinking", thinking_on),
-                            ("check_update", check_update_on), ("debug_view", debug_view_on)):
+                            ("check_update", check_update_on), ("debug_view", debug_view_on),
+                            ("jev_judge", jev_judge_on)):
             if value is not None:
                 demo_settings[name] = bool(value)
 
@@ -152,9 +155,15 @@ def main() -> int:
                 "gemini": ["gemini-demo-pro", "gemini-demo-flash"]}.get(
             protocol, ["deepseek-flash", "deepseek-reasoner", "demo-model-a", "demo-model-b"])
 
+    def fake_check(*_args, **_kwargs):
+        """「测试」按钮：演示不联网，睡一小下假装一次往返（真程序这里会打一次最小真实请求）。"""
+        time.sleep(0.3)
+
     # 在创建 Overlay 前替换设置接口，整个事件循环期间都保持隔离。
     with patch("core.jev_client.list_models", fake_jev_models), patch(
-            "core.llm.list_models", fake_llm_models), patch.multiple(
+            "core.llm.list_models", fake_llm_models), patch(
+            "core.jev_client.check", fake_check), patch(
+            "core.llm.check", fake_check), patch.multiple(
         settings,
         has_key=lambda: bool(demo_settings["jev_key"]),
         has_jev_key=lambda: bool(demo_settings["jev_key"]),
@@ -169,6 +178,7 @@ def main() -> int:
         draft_model=lambda: demo_settings["draft_model"],
         draft_base_url=lambda: demo_settings["draft_base_url"],
         reply_target=lambda: demo_settings["reply_target"],
+        jev_judge=lambda: demo_settings.get("jev_judge", True),
         style=lambda: demo_settings["style"],
         thinking=lambda: demo_settings["thinking"],
         check_update=lambda: demo_settings["check_update"],

@@ -139,6 +139,7 @@ def analyze_bg(msgs, title, revision, reply_to=None, summary="", pending=None):
                                    thinking=settings.thinking(),
                                    jev_provider=settings.jev_provider(),
                                    jev_model=settings.jev_model() or None,
+                                   jev_judge=settings.jev_judge(),
                                    skill=settings.skill(),
                                    skill_distill=settings.skill_distill(),
                                    summary=summary, pending=pending),
@@ -155,8 +156,8 @@ def check_update_bg():
 
 
 def start_analyze(title, msgs):
-    if not settings.has_jev_key():
-        ov.set_status("请先在设置中配置模型", "warning")
+    if settings.jev_judge() and not settings.has_jev_key():  # 关掉判断就不用 Jev 那把 key 了
+        ov.set_status("请先在设置中配置模型，或关掉「判断 · Jev」", "warning")
         return
     if not settings.has_llm_key():
         ov.set_status(f"起草来源 {settings.draft_provider_name()} 没填密钥，去设置里补上", "warning")
@@ -310,7 +311,8 @@ if __name__ == "__main__":  # Windows 的 spawn 会让子进程重新执行本�
         child = spawn_worker()
     if settings.debug_view():  # 上次开着就直接开回来
         set_debug(True)
-    if not settings.has_jev_key():
+    # 该配的还没配：判断那把（开着判断才要）或者起草那把。少一把就别等着新消息了，直接把设置页推上来
+    if (settings.jev_judge() and not settings.has_jev_key()) or not settings.has_llm_key():
         ov.set_status("请先在设置中配置模型", "warning")
         ov.after(0, ov.open_settings)
     if settings.check_update() and update.parse_version(VERSION):  # 开发版没有版本号，不查也不烦源码用户
